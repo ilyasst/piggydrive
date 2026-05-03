@@ -105,7 +105,9 @@ piggydrive is built to be used by an LLM-driven agent (like a Hermes-style codin
 - **Predictable blocking** — `pull` returns only when the file is fully local; the agent never sees half-fetched data
 - **Spotlight-backed `find`** so the agent can locate files in O(milliseconds) on huge trees instead of recursive `ls`
 
-See [docs/hermes-integration.md](docs/hermes-integration.md) for example agent usage patterns.
+For agent integration:
+- **Hermes skill**: drop-in skill file at [`skills/piggydrive/SKILL.md`](skills/piggydrive/SKILL.md). Symlink it into `~/.hermes/skills/piggydrive/SKILL.md` to teach a Hermes agent when and how to use piggydrive (priorities, anti-patterns, recovery strategies). See [`skills/README.md`](skills/README.md) for install instructions.
+- **Agent usage guide**: [`docs/hermes-integration.md`](docs/hermes-integration.md) explains recommended call patterns and the exit-code → recovery-strategy contract in narrative form.
 
 ## Why "piggydrive"?
 
