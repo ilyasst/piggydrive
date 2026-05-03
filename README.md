@@ -46,7 +46,50 @@ The sidecar exposes a small HTTP+JSON API. The CLI consumes it. All cloud auth a
 
 ## Status
 
-**Pre-alpha.** Designed but not yet implemented. See `docs/architecture.md` for the design.
+**v1 working.** End-to-end tested against a real institutional OneDrive (ETS Montreal):
+
+- `ls /` lists the full OneDrive root in <200ms
+- `stat` correctly distinguishes Files-On-Demand stubs (`materialized: false`) from local files
+- `pull` triggers cloud materialization and waits for completion (~7s for a 2.8MB stub on first access, sub-second cached)
+- `push` writes through the Mac's OneDrive client; cloud sync follows asynchronously
+- `rm`, `mv`, `mkdir`, `cat`, `sync-status`, `wait-online`, `config check` all working
+
+See `docs/architecture.md` for the design. See `sidecar/` and `client/` for the install scripts.
+
+## Setup
+
+### On the bridge (Mac with OneDrive)
+
+```bash
+git clone git@github.com:ilyasst/piggydrive.git
+cd piggydrive/sidecar
+./install.sh /Users/$USER/Library/CloudStorage/OneDrive-<YourTenant>
+```
+
+The install script generates a bearer token, writes a config, copies the daemon to `~/Library/Application Support/piggydrive-sidecar/`, installs a launchd plist, and starts the service.
+
+**Required manual step on macOS**: grant Full Disk Access to your `python3` binary (the one the install script printed). Without this, `launchd`-spawned daemons cannot read `~/Library/CloudStorage/` and file operations will silently hang. System Settings → Privacy & Security → Full Disk Access → `+` → `/usr/local/bin/python3` (or wherever your python3 lives).
+
+This is a one-time per-Mac step. The install script reminds you with the exact path at the end.
+
+### On a client (Linux box)
+
+```bash
+git clone git@github.com:ilyasst/piggydrive.git
+cd piggydrive/client
+./install.sh
+```
+
+Edit `~/.config/piggydrive/config.toml`:
+- `bridge.url` — `http://<bridge-tailscale-hostname>:9090`
+- `bridge.token` — paste from `~/.config/piggydrive-sidecar/token` on the bridge
+
+Smoke test:
+```bash
+piggydrive config check
+piggydrive ls /
+piggydrive pull /SomeFile.pdf ~/local/file.pdf
+```
 
 ## Why "piggydrive"?
 

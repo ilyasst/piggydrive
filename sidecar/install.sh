@@ -121,6 +121,35 @@ if curl -sf http://127.0.0.1:9090/healthz >/dev/null; then
     echo "On the Linux side, point your client config at this Mac:"
     echo "  url = \"http://$(hostname -s):9090\""
     echo "  token = \"<the token above>\""
+    echo
+    cat <<EOF
+
+────────────────────────────────────────────────────────────────────────
+REQUIRED MANUAL STEP: grant Full Disk Access to python3
+
+macOS TCC (Transparency, Consent, Control) blocks launchd-spawned
+processes from reading ~/Library/CloudStorage/ by default. Without
+granting access, /ls and /pull will silently hang.
+
+Open System Settings:
+  Privacy & Security → Full Disk Access → click "+"
+  Press Cmd+Shift+G, paste this path, press Enter, click Add:
+    $PYTHON
+  Make sure the toggle next to it is ON.
+
+Then reload the daemon:
+  launchctl unload  $PLIST_OUT
+  launchctl load    $PLIST_OUT
+
+Confirm it can read the OneDrive folder:
+  curl -sf -H "Authorization: Bearer \$(cat $CONF_DIR/token)" \\
+    "http://127.0.0.1:9090/ls?path=/" | head -c 200
+
+If you skip this, the daemon will run but file ops will hang. The
+healthz check above passes either way — it doesn't touch the protected
+folder.
+────────────────────────────────────────────────────────────────────────
+EOF
 else
     echo
     echo "⚠ healthz check failed. Inspect logs:"
