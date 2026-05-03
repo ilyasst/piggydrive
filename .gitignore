@@ -1,0 +1,28 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+*.egg
+.venv/
+venv/
+.eggs/
+build/
+dist/
+
+# Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Local config (may contain bearer tokens, hostnames)
+*.local.toml
+*.local.yaml
+config.local.*
+.piggydrive/
+
+# Backups
+*.bak
+*.bak-*

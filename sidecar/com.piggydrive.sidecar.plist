@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.piggydrive.sidecar</string>
+
+    <!-- Replace ${USER} with your username and ${HOME} with /Users/<username> -->
+    <key>ProgramArguments</key>
+    <array>
+        <string>/usr/local/bin/python3</string>
+        <string>${HOME}/Library/Application Support/piggydrive-sidecar/sidecar.py</string>
+        <string>--config</string>
+        <string>${HOME}/.config/piggydrive-sidecar/config.toml</string>
+    </array>
+
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+
+    <key>StandardOutPath</key>
+    <string>${HOME}/Library/Logs/piggydrive-sidecar.out.log</string>
+    <key>StandardErrorPath</key>
+    <string>${HOME}/Library/Logs/piggydrive-sidecar.err.log</string>
+
+    <!-- Throttle restart loop if the daemon keeps crashing -->
+    <key>ThrottleInterval</key>
+    <integer>10</integer>
+</dict>
+</plist>

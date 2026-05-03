@@ -1,0 +1,29 @@
+# piggydrive-sidecar config — copy to ~/.config/piggydrive-sidecar/config.toml
+# and adjust the OneDrive root path to match your machine.
+
+[server]
+# 0.0.0.0 binds all interfaces. If you want to restrict to your Tailscale
+# interface only, find your Tailscale IP and put it here. Bearer token auth
+# below is the actual access control.
+host = "0.0.0.0"
+port = 9090
+
+[onedrive]
+# Absolute path to the OneDrive root on this Mac. Find yours:
+#   ls ~/Library/CloudStorage/
+# Common patterns:
+#   /Users/<you>/Library/CloudStorage/OneDrive-<TenantName>
+#   /Users/<you>/Library/CloudStorage/OneDrive-Personal
+root = "/Users/CHANGEME/Library/CloudStorage/OneDrive-CHANGEME"
+
+[auth]
+# Bearer token used to authenticate clients. Generate with:
+#   openssl rand -hex 32 > ~/.config/piggydrive-sidecar/token
+#   chmod 600 ~/.config/piggydrive-sidecar/token
+# Then deploy the same token to client config on Linux machines.
+token_file = "~/.config/piggydrive-sidecar/token"
+
+[materialize]
+# How long to wait for a Files-On-Demand stub to download from cloud.
+poll_interval_ms = 250
+default_timeout_seconds = 120

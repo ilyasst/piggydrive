@@ -1,0 +1,14 @@
+# piggydrive client config — copy to ~/.config/piggydrive/config.toml
+
+[bridge]
+# Tailscale hostname or IP of the Mac running piggydrive-sidecar.
+# (The sidecar listens on port 9090 by default.)
+url = "http://CHANGEME-bridge-host:9090"
+
+# Bearer token from the bridge: cat ~/.config/piggydrive-sidecar/token on the Mac.
+token = "CHANGEME-paste-token-here"
+
+[defaults]
+# Default timeout for materializing Files-On-Demand stubs.
+pull_timeout_seconds = 120
+verbose = false
