@@ -199,17 +199,163 @@ def onedrive_running() -> bool:
         return False
 
 
+def find_account_id_for_root(root: Path) -> str | None:
+    """Map a CloudStorage OneDrive folder path to its OneDrive account ID.
+
+    OneDrive stores per-account config at
+      ~/Library/Application Support/OneDrive/settings/<AccountID>/<cid>.ini
+    where each ini contains a `libraryScope` line referencing the human-
+    readable folder name (e.g. "OneDrive - Acme"). The CloudStorage folder
+    name strips spaces and special chars (e.g. "OneDrive-Acme"), so we
+    convert one form to the other for matching.
+
+    Returns the account ID (e.g. "Business1") or None if no match.
+    """
+    cs_name = root.name  # e.g. "OneDrive-Acme"
+    # Reverse macOS's space-stripping: "OneDrive-Acme" → match "OneDrive - Acme"
+    if cs_name.startswith("OneDrive-"):
+        suffix = cs_name[len("OneDrive-"):]
+        target = f"OneDrive - {suffix}"
+    else:
+        target = cs_name
+
+    settings_dir = Path("~/Library/Application Support/OneDrive/settings").expanduser()
+    if not settings_dir.is_dir():
+        return None
+
+    for account_dir in sorted(settings_dir.iterdir()):
+        if not account_dir.is_dir():
+            continue
+        for ini in account_dir.glob("*.ini"):
+            try:
+                content = ini.read_text(errors="replace")
+            except OSError:
+                continue
+            if "libraryScope" in content and target in content:
+                return account_dir.name
+    return None
+
+
+def find_sync_diagnostics_log(root: Path) -> Path | None:
+    """Locate the SyncDiagnostics.log for the OneDrive account bound to `root`.
+
+    Strategy:
+      1. Map root → account ID via the libraryScope ini files. If matched,
+         return that account's log.
+      2. Fall back to the most-recently-updated log across all accounts.
+         Useful when only one account is configured, or when matching fails
+         for an exotic folder layout.
+
+    Returns None if the OneDrive logs directory doesn't exist.
+    """
+    log_root = Path("~/Library/Logs/OneDrive").expanduser()
+    if not log_root.is_dir():
+        return None
+
+    account_id = find_account_id_for_root(root)
+    if account_id:
+        candidate = log_root / account_id / "SyncDiagnostics.log"
+        if candidate.is_file():
+            return candidate
+        # Account directory exists but no SyncDiagnostics.log yet (cold start).
+
+    # Fallback: most recently updated log
+    candidates = [p for p in log_root.glob("*/SyncDiagnostics.log") if p.is_file()]
+    if not candidates:
+        return None
+    return max(candidates, key=lambda p: p.stat().st_mtime)
+
+
+def parse_sync_diagnostics(log_path: Path) -> dict[str, Any] | None:
+    """Parse OneDrive's SyncDiagnostics.log into a structured dict.
+
+    The log is a textual report with `key = value` lines after a header. We
+    extract the fields most useful to an agent deciding whether the bridge
+    has caught up with cloud (FilesToUpload, BytesToUpload, etc.) or whether
+    it's stalled.
+
+    Returns None if the file can't be read or has no parseable fields.
+    """
+    try:
+        text = log_path.read_text(errors="replace")
+    except OSError:
+        return None
+
+    fields: dict[str, str] = {}
+    for line in text.splitlines():
+        if "=" in line and not line.startswith("="):
+            k, _, v = line.partition("=")
+            fields[k.strip()] = v.strip()
+    if not fields:
+        return None
+
+    def _int(key: str, default: int = 0) -> int:
+        try:
+            return int(fields.get(key, default))
+        except (ValueError, TypeError):
+            return default
+
+    snapshot_time_str = fields.get("UtcNow") or fields.get("timeUtc") or ""
+    snapshot_age: float | None = None
+    fresh = False
+    if snapshot_time_str:
+        try:
+            ts = datetime.fromisoformat(snapshot_time_str.replace("Z", "+00:00"))
+            snapshot_age = (datetime.now(timezone.utc) - ts).total_seconds()
+            fresh = snapshot_age < 300  # 5 min
+        except (ValueError, AttributeError):
+            pass
+
+    return {
+        "snapshot_time_utc": snapshot_time_str,
+        "snapshot_age_seconds": snapshot_age,
+        "fresh": fresh,
+        "total_files": _int("files"),
+        "total_folders": _int("folders"),
+        "pending": {
+            "files_to_upload": _int("FilesToUpload"),
+            "bytes_to_upload": _int("BytesToUpload"),
+            "files_to_download": _int("FilesToDownload"),
+            "bytes_to_download": _int("BytesToDownload"),
+            "changes_to_process": _int("ChangesToProcess"),
+            "changes_to_send": _int("ChangesToSend"),
+        },
+        "speeds": {
+            "upload_bytes_per_sec": _int("UploadSpeedBytesPerSec"),
+            "download_bytes_per_sec": _int("DownloadSpeedBytesPerSec"),
+            "est_time_remaining_seconds": _int("EstTimeRemainingInSec"),
+        },
+        "failures": {
+            "num_file_failed_uploads": _int("numFileFailedUploads"),
+            "num_file_failed_downloads": _int("numFileFailedDownloads"),
+            "conflicts_failed": _int("conflictsFailed"),
+        },
+        "stalled": _int("syncStallDetected") != 0,
+        "client_version": fields.get("clientVersion", ""),
+    }
+
+
 def sync_status(config: Config) -> dict[str, Any]:
     """Return a snapshot of bridge + OneDrive state.
 
-    pending_uploads is currently a placeholder — we don't have a reliable way
-    to query OneDrive's queue without parsing log files. Future work.
+    Top-level fields are stable for backwards compat. The detailed `report`
+    sub-object comes from parsing OneDrive's SyncDiagnostics.log; it may be
+    null if that log isn't present or readable.
+
+    `pending_uploads` is the integer count of files queued for upload — the
+    field most agents will check before assuming a recent push is
+    cloud-visible.
     """
+    log_path = find_sync_diagnostics_log(config.root)
+    report = parse_sync_diagnostics(log_path) if log_path else None
+    pending_uploads = report["pending"]["files_to_upload"] if report else None
     return {
         "bridge_online": True,
         "onedrive_running": onedrive_running(),
         "onedrive_root": str(config.root),
-        "pending_uploads": None,  # not yet implemented
+        "pending_uploads": pending_uploads,
+        "report": report,
+        "report_path": str(log_path) if log_path else None,
         "last_error": None,
     }
 

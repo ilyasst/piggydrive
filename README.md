@@ -46,15 +46,19 @@ The sidecar exposes a small HTTP+JSON API. The CLI consumes it. All cloud auth a
 
 ## Status
 
-**v1 working.** End-to-end tested against a real institutional OneDrive (ETS Montreal):
+**v1 working.** End-to-end tested against a real institutional OneDrive (ETS Montreal — 208,703 files, 19,375 folders):
 
-- `ls /` lists the full OneDrive root in <200ms
-- `stat` correctly distinguishes Files-On-Demand stubs (`materialized: false`) from local files
-- `pull` triggers cloud materialization and waits for completion (~7s for a 2.8MB stub on first access, sub-second cached)
-- `push` writes through the Mac's OneDrive client; cloud sync follows asynchronously
-- `rm`, `mv`, `mkdir`, `cat`, `sync-status`, `wait-online`, `config check` all working
+- `ls` — list a remote directory (<200ms)
+- `find` — Spotlight-backed name search across the entire tree (~450ms regardless of tree size). Works on stub files too.
+- `stat` — distinguishes Files-On-Demand stubs (`materialized: false`) from local files
+- `pull` — triggers cloud materialization, waits for completion, streams bytes (~7s for a 2.8MB stub on first access, sub-second cached)
+- `push` — writes through the Mac's OneDrive client; cloud sync follows asynchronously
+- `cat` — convenience: pull + write-to-stdout
+- `rm`, `mv`, `mkdir` — straightforward filesystem ops
+- `sync-status` — bridge state + parsed OneDrive `SyncDiagnostics.log`: pending uploads, pending downloads, sync stalls, failure counts, client version
+- `wait-online`, `config check` — health/diagnostics
 
-See `docs/architecture.md` for the design. See `sidecar/` and `client/` for the install scripts.
+See `docs/architecture.md` for the design and `docs/hermes-integration.md` for using piggydrive from a Hermes-backed agent. See `sidecar/` and `client/` for the install scripts.
 
 ## Setup
 
@@ -91,9 +95,33 @@ piggydrive ls /
 piggydrive pull /SomeFile.pdf ~/local/file.pdf
 ```
 
+## Designed for agents
+
+piggydrive is built to be used by an LLM-driven agent (like a Hermes-style coding assistant) as much as by humans. Concretely:
+
+- **Default JSON output** for `stat`, `find --json`, `sync-status`, `config check` — machine-readable
+- **Distinct exit codes per failure mode** (`10` bridge unreachable, `12` not found, `13` materialize timeout, `14` cloud sync failed, `15` permission, `16` auth) so the agent can branch its recovery strategy without parsing error strings
+- **Idempotent operations** — `pull` works whether the file is a stub or already materialized
+- **Predictable blocking** — `pull` returns only when the file is fully local; the agent never sees half-fetched data
+- **Spotlight-backed `find`** so the agent can locate files in O(milliseconds) on huge trees instead of recursive `ls`
+
+See [docs/hermes-integration.md](docs/hermes-integration.md) for example agent usage patterns.
+
 ## Why "piggydrive"?
 
 You're piggybacking on another device's already-authorized cloud sync. Hence `piggy + drive`.
+
+## Roadmap
+
+Things planned for v2+ (not in v1):
+
+- **Multi-bridge support.** v1 assumes one Linux client → one Mac bridge. v2 will support multiple bridges per client (e.g., one for OneDrive-Acme via your work Mac, one for OneDrive-Personal via a different Mac, one for Google Drive via a Windows machine), selectable via `piggydrive --bridge work ls /`.
+- **Windows bridge.** The architecture is OS-neutral. A Python sidecar on Windows that talks to OneDrive-for-Business via NTFS reparse points and the Windows OneDrive client would extend piggydrive to Windows-OneDrive shops. Probably ~75% code reuse with the macOS sidecar; the stub-detection differs (NTFS `FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS` instead of APFS dataless files).
+- **Other cloud providers.** Same piggyback pattern works for Google Drive (`~/Library/CloudStorage/GoogleDrive-<email>/`), Dropbox, Box, etc. The sidecar abstraction makes this a per-provider plugin, not a rewrite.
+- **Native Hermes plugin.** v1 uses the agent's existing `terminal` tool to invoke piggydrive. A native plugin (in-process HTTP client, typed tool definitions, streaming progress) would be more efficient and cleaner. v1 works fine without it.
+- **Content search.** `find` currently searches by name. Spotlight indexes file *contents* too for materialized files of supported types (PDFs, Office docs, etc.), so a `--content` mode could search inside files. Won't work for stubs.
+- **Bidirectional sync mode.** Some users want continuous mirroring of a remote subtree to a local folder. piggydrive is currently pull/push only — adding a `mirror` mode (one-shot or watch) is straightforward but not in v1.
+- **TLS termination.** Currently HTTP over Tailscale. For non-Tailscale deployments, adding optional TLS at the sidecar (or sitting it behind a reverse proxy) is easy.
 
 ## License
 
