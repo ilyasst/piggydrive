@@ -169,6 +169,13 @@ class Bridge:
     def ls(self, path: str, depth: int = 1) -> dict[str, Any]:
         return self._request_json("GET", "/ls", query={"path": path, "depth": depth}, timeout=30)
 
+    def find(self, name: str, in_path: str = "/", max_results: int = 200) -> dict[str, Any]:
+        return self._request_json(
+            "GET", "/find",
+            query={"name": name, "path": in_path, "max_results": max_results},
+            timeout=30,
+        )
+
     def stat(self, path: str) -> dict[str, Any]:
         return self._request_json("GET", "/stat", query={"path": path}, timeout=10)
 
@@ -225,6 +232,24 @@ def cmd_ls(bridge: Bridge, args: argparse.Namespace) -> int:
 def cmd_stat(bridge: Bridge, args: argparse.Namespace) -> int:
     result = bridge.stat(args.path)
     print(json.dumps(result, ensure_ascii=False, indent=2))
+    return EXIT_OK
+
+
+def cmd_find(bridge: Bridge, args: argparse.Namespace) -> int:
+    result = bridge.find(args.query, in_path=args.in_path, max_results=args.max)
+    if args.json:
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        return EXIT_OK
+    if not result["results"]:
+        print(f"(no matches for {args.query!r} under {args.in_path})")
+        return EXIT_OK
+    for entry in result["results"]:
+        flag = "d" if entry["is_dir"] else ("s" if not entry["materialized"] else "-")
+        size = entry["size_bytes"]
+        size_str = f"{size:>12,}".replace(",", "_")
+        print(f"{flag} {size_str}  {entry['path']}")
+    if result.get("truncated"):
+        print(f"\n(truncated to {len(result['results'])} results — use --max to widen)")
     return EXIT_OK
 
 
@@ -346,6 +371,22 @@ def make_parser() -> argparse.ArgumentParser:
     s = sub.add_parser("stat", help="Stat a remote path (always JSON)")
     s.add_argument("path")
     s.set_defaults(func=cmd_stat)
+
+    s = sub.add_parser(
+        "find",
+        help="Search for filenames containing a substring (Spotlight on macOS)",
+    )
+    s.add_argument("query", help="Substring of filename to match (case-insensitive)")
+    s.add_argument(
+        "--in", dest="in_path", default="/",
+        help="Limit search to this subtree (default: /)",
+    )
+    s.add_argument(
+        "--max", type=int, default=100,
+        help="Max results to return (default: 100, sidecar caps at 5000)",
+    )
+    s.add_argument("--json", action="store_true")
+    s.set_defaults(func=cmd_find)
 
     s = sub.add_parser("pull", help="Download a remote file")
     s.add_argument("remote")

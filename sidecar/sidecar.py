@@ -278,6 +278,8 @@ class Handler(BaseHTTPRequestHandler):
             self._handle_stat()
         elif path == "/pull":
             self._handle_pull()
+        elif path == "/find":
+            self._handle_find()
         else:
             self._send_json({"error": f"unknown endpoint: {path}"}, 404)
 
@@ -331,6 +333,91 @@ class Handler(BaseHTTPRequestHandler):
             self._send_json({"error": "path escapes onedrive root"}, 400)
             return
         self._send_json(stat_entry(target, self.config.root))
+
+    def _handle_find(self) -> None:
+        """Search for filenames containing a substring, scoped to a subtree.
+
+        On macOS, uses Spotlight (`mdfind`) for sub-second results across
+        large trees. Stub files ARE indexed by Spotlight (filenames are
+        always recorded regardless of Files-On-Demand state), so the search
+        works whether files are materialized or not.
+
+        Falls back to rglob() on platforms without mdfind, or if mdfind
+        fails. The fallback is much slower on big trees but always works.
+        """
+        q = self._query()
+        name = q.get("name", "").strip()
+        if not name:
+            self._send_json({"error": "name parameter required"}, 400)
+            return
+
+        subtree_param = q.get("path", "/")
+        subtree = safe_resolve(subtree_param, self.config.root)
+        if subtree is None:
+            self._send_json({"error": "path escapes onedrive root"}, 400)
+            return
+        if not subtree.exists():
+            self._send_json({"error": "path not found"}, 404)
+            return
+
+        try:
+            max_results = max(1, min(int(q.get("max_results", 200)), 5000))
+        except ValueError:
+            max_results = 200
+
+        paths: list[str] = []
+        used_engine = "rglob"
+
+        # Try mdfind first (macOS Spotlight). Returns absolute paths.
+        if shutil.which("mdfind"):
+            try:
+                result = subprocess.run(
+                    ["mdfind", "-onlyin", str(subtree), "-name", name],
+                    capture_output=True, text=True, timeout=15,
+                )
+                if result.returncode == 0:
+                    paths = [
+                        line for line in result.stdout.splitlines()
+                        if line.strip()
+                    ]
+                    used_engine = "mdfind"
+            except (subprocess.TimeoutExpired, OSError):
+                pass  # fall through to rglob
+
+        if used_engine != "mdfind":
+            # Fallback: rglob with substring match. Slower but portable.
+            needle = name.lower()
+            try:
+                for p in subtree.rglob("*"):
+                    if needle in p.name.lower():
+                        paths.append(str(p))
+                        if len(paths) >= max_results:
+                            break
+            except (OSError, PermissionError) as exc:
+                self._send_json({"error": f"rglob failed: {exc}"}, 500)
+                return
+
+        # Build stat entries for the matched paths
+        truncated = len(paths) > max_results
+        results = []
+        for path_str in paths[:max_results]:
+            p = Path(path_str)
+            try:
+                # mdfind can return paths outside subtree if Spotlight gives
+                # broader scope than expected — re-check containment.
+                p.resolve().relative_to(self.config.root)
+                results.append(stat_entry(p, self.config.root))
+            except (FileNotFoundError, ValueError):
+                continue
+
+        self._send_json({
+            "query": name,
+            "in_path": subtree_param,
+            "engine": used_engine,
+            "results": results,
+            "truncated": truncated,
+            "total_returned": len(results),
+        })
 
     def _handle_pull(self) -> None:
         q = self._query()
