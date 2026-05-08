@@ -240,6 +240,12 @@ def cmd_find(bridge: Bridge, args: argparse.Namespace) -> int:
     if args.json:
         print(json.dumps(result, ensure_ascii=False, indent=2))
         return EXIT_OK
+    if args.paths_only:
+        for entry in result["results"]:
+            print(entry["path"])
+        if result.get("truncated"):
+            print(f"# (truncated to {len(result['results'])} — widen with --max)")
+        return EXIT_OK
     if not result["results"]:
         print(f"(no matches for {args.query!r} under {args.in_path})")
         return EXIT_OK
@@ -386,6 +392,11 @@ def make_parser() -> argparse.ArgumentParser:
         help="Max results to return (default: 100, sidecar caps at 5000)",
     )
     s.add_argument("--json", action="store_true")
+    s.add_argument(
+        "--paths-only", action="store_true",
+        help="Print only paths, one per line. Smallest output — best for "
+             "agent first-pass discovery before stat/pull on specific items.",
+    )
     s.set_defaults(func=cmd_find)
 
     s = sub.add_parser("pull", help="Download a remote file")
