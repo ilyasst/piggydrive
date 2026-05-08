@@ -1,14 +1,37 @@
 # piggydrive client config — copy to ~/.config/piggydrive/config.toml
+#
+# Two formats are supported:
+#   - [bridge]    — single bridge (legacy; still works)
+#   - [[bridges]] — list of bridges; tried in order with automatic fallback
+#                   on connectivity-class failures (network unreachable,
+#                   connection reset, timeout). HTTP-level errors
+#                   (404/401/etc.) do NOT trigger fallback — they're
+#                   definitive answers from the bridge.
+#
+# When both [[bridges]] and [bridge] appear, [[bridges]] wins.
 
-[bridge]
-# Tailscale hostname or IP of the Mac running piggydrive-sidecar.
-# (The sidecar listens on port 9090 by default.)
-url = "http://CHANGEME-bridge-host:9090"
+# ── Multi-bridge example (recommended) ──────────────────────────────
+# Useful when you have more than one machine running the cloud-sync
+# client + a piggydrive-sidecar (e.g. a primary workstation + a backup
+# laptop both syncing the same drive). The client transparently falls
+# back to the next bridge if the first is unreachable.
 
-# Bearer token from the bridge: cat ~/.config/piggydrive-sidecar/token on the Mac.
-token = "CHANGEME-paste-token-here"
+[[bridges]]
+name  = "primary"
+url   = "http://CHANGEME-primary-host:9090"
+token = "CHANGEME-primary-token"
+
+[[bridges]]
+name  = "fallback"
+url   = "http://CHANGEME-fallback-host:9090"
+token = "CHANGEME-fallback-token"      # may differ if each sidecar minted its own
+
+# ── Single-bridge example (legacy) ──────────────────────────────────
+# [bridge]
+# url   = "http://CHANGEME-bridge-host:9090"
+# token = "CHANGEME-paste-token-here"
 
 [defaults]
 # Default timeout for materializing Files-On-Demand stubs.
 pull_timeout_seconds = 120
-verbose = false
+verbose = false   # set true to print "trying next bridge" notices to stderr

@@ -136,12 +136,38 @@ def materialize(path: Path, poll_ms: int, timeout_s: int) -> tuple[bool, str | N
     if not is_stub(path):
         return True, None  # already materialized (or not a stub at all)
 
-    # Trigger: read one byte. macOS / Windows file provider intercepts.
-    try:
-        with path.open("rb") as f:
-            f.read(1)
-    except (FileNotFoundError, PermissionError) as exc:
-        return False, f"trigger read failed: {exc}"
+    # Trigger: read one byte. macOS / Windows file provider intercepts the
+    # read and pulls content from the cloud.
+    #
+    # Retry on EDEADLK/EAGAIN: the cloud-sync helper (e.g. macOS fileproviderd)
+    # may already hold a kernel lock on the same inode if it's mid-sync on
+    # this file. The kernel returns EDEADLK rather than risking a hang. The
+    # previous behaviour was to crash the HTTP handler; the connection then
+    # closed without a response, which clients reported as "Remote end closed
+    # connection without response" — entirely opaque. Now we back off and
+    # retry; if still stuck after a few attempts, we surface a clear error.
+    import errno
+    last_err: OSError | None = None
+    for attempt in range(5):
+        try:
+            with path.open("rb") as f:
+                f.read(1)
+            break
+        except (FileNotFoundError, PermissionError) as exc:
+            return False, f"trigger read failed: {exc}"
+        except OSError as exc:
+            if exc.errno in (errno.EDEADLK, errno.EAGAIN):
+                last_err = exc
+                # Linear backoff: 0.5s, 1.0s, 1.5s, 2.0s, 2.5s — total ~7.5s
+                time.sleep(0.5 * (attempt + 1))
+                continue
+            return False, f"trigger read failed: {exc}"
+    else:
+        return False, (
+            f"trigger read deadlocked after 5 retries (errno "
+            f"{last_err.errno if last_err else '?'}): {last_err}. "
+            f"The cloud-sync client appears busy with this file — try again in a few seconds."
+        )
 
     deadline = time.monotonic() + timeout_s
     last_size = -1

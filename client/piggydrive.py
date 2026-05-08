@@ -52,15 +52,38 @@ DEFAULT_CONFIG_PATH = Path("~/.config/piggydrive/config.toml").expanduser()
 # ── Config ───────────────────────────────────────────────────────────
 
 
-class Config:
-    def __init__(self, raw: dict[str, Any]) -> None:
-        bridge = raw.get("bridge", {})
-        url = bridge.get("url")
-        token = bridge.get("token")
-        if not url or not token:
-            raise ValueError("bridge.url and bridge.token are required in config")
+class BridgeEndpoint:
+    """One sidecar's URL + bearer token. Multiple endpoints can be declared
+    in config and the client will fall back through them in order on
+    connectivity-class failures."""
+    __slots__ = ("url", "token", "name")
+
+    def __init__(self, url: str, token: str, name: str = "") -> None:
         self.url: str = url.rstrip("/")
         self.token: str = token
+        self.name: str = name or url
+
+
+class Config:
+    def __init__(self, raw: dict[str, Any]) -> None:
+        # New multi-bridge format takes precedence: [[bridges]] array
+        bridges_raw: list[dict[str, Any]] = list(raw.get("bridges", []) or [])
+        # Legacy single-bridge format: [bridge] block
+        if not bridges_raw and raw.get("bridge"):
+            bridges_raw = [raw["bridge"]]
+        if not bridges_raw:
+            raise ValueError(
+                "config must declare at least one bridge — use [[bridges]] "
+                "(array of {url, token, name}) or [bridge] (single)."
+            )
+
+        self.bridges: list[BridgeEndpoint] = []
+        for i, b in enumerate(bridges_raw):
+            url = b.get("url")
+            token = b.get("token")
+            if not url or not token:
+                raise ValueError(f"bridge[{i}] missing url or token")
+            self.bridges.append(BridgeEndpoint(url, token, b.get("name", "")))
 
         defaults = raw.get("defaults", {})
         self.pull_timeout_seconds: int = int(defaults.get("pull_timeout_seconds", 120))
@@ -71,7 +94,7 @@ class Config:
         if not path.is_file():
             raise FileNotFoundError(
                 f"Config not found: {path}\n"
-                f"Create it with bridge.url and bridge.token. "
+                f"Create it with at least one bridge. "
                 f"See docs/architecture.md for the format."
             )
         with path.open("rb") as f:
@@ -92,20 +115,23 @@ class Bridge:
     def __init__(self, config: Config) -> None:
         self.config = config
 
-    def _request(
-        self, method: str, endpoint: str, *,
+    def _request_one(
+        self, ep: BridgeEndpoint, method: str, endpoint: str, *,
         query: dict[str, Any] | None = None,
         body: bytes | None = None,
         body_content_type: str = "application/octet-stream",
         timeout: int | None = None,
     ) -> tuple[int, dict[str, str], bytes]:
-        url = self.config.url + endpoint
+        """Send one request to one endpoint. Connectivity errors raise
+        BridgeError(EXIT_BRIDGE_UNREACHABLE) so the multi-endpoint dispatcher
+        in :meth:`_request` knows to try the next bridge."""
+        url = ep.url + endpoint
         if query:
             url += "?" + urllib.parse.urlencode(
                 {k: str(v) for k, v in query.items() if v is not None}
             )
         req = urllib.request.Request(url, method=method, data=body)
-        req.add_header("Authorization", f"Bearer {self.config.token}")
+        req.add_header("Authorization", f"Bearer {ep.token}")
         if body is not None:
             req.add_header("Content-Type", body_content_type)
             req.add_header("Content-Length", str(len(body)))
@@ -113,12 +139,50 @@ class Bridge:
             with urllib.request.urlopen(req, timeout=timeout) as resp:
                 return resp.status, dict(resp.headers), resp.read()
         except urllib.error.HTTPError as exc:
+            # HTTP-level error from the bridge (e.g. 4xx, 5xx). The bridge IS
+            # reachable; the response is just an error. Return it normally so
+            # the caller can decide how to handle (404, 401, etc. should NOT
+            # trigger fallback — those are definitive answers from this bridge).
             return exc.code, dict(exc.headers or {}), exc.read()
         except (urllib.error.URLError, TimeoutError, ConnectionError) as exc:
             raise BridgeError(
-                f"bridge unreachable at {self.config.url}: {exc}",
+                f"bridge {ep.name} unreachable at {ep.url}: {exc}",
                 EXIT_BRIDGE_UNREACHABLE,
             ) from exc
+
+    def _request(
+        self, method: str, endpoint: str, *,
+        query: dict[str, Any] | None = None,
+        body: bytes | None = None,
+        body_content_type: str = "application/octet-stream",
+        timeout: int | None = None,
+    ) -> tuple[int, dict[str, str], bytes]:
+        """Try each configured bridge in order. Falls back on connectivity-
+        class errors (network unreachable, connection reset, timeout). Does
+        NOT fall back on HTTP-level errors — a 404 from one bridge with the
+        file present + a 404 from another would just delay a real answer.
+
+        Returns the FIRST successful response (HTTP-level success or HTTP-level
+        error). Only raises if EVERY bridge was unreachable.
+        """
+        last_err: BridgeError | None = None
+        for ep in self.config.bridges:
+            try:
+                return self._request_one(
+                    ep, method, endpoint,
+                    query=query, body=body,
+                    body_content_type=body_content_type, timeout=timeout,
+                )
+            except BridgeError as e:
+                last_err = e
+                if self.config.verbose:
+                    print(f"piggydrive: bridge {ep.name} failed ({e}); trying next",
+                          file=sys.stderr)
+                continue
+        # All bridges exhausted
+        if last_err is not None:
+            raise last_err
+        raise BridgeError("no bridges configured", EXIT_BRIDGE_UNREACHABLE)
 
     def _request_json(
         self, method: str, endpoint: str, *,
