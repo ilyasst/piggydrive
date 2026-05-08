@@ -117,7 +117,12 @@ You're piggybacking on another device's already-authorized cloud sync. Hence `pi
 
 Things planned for v2+ (not in v1):
 
-- **Multi-bridge support.** v1 assumes one Linux client → one Mac bridge. v2 will support multiple bridges per client (e.g., one for OneDrive-Acme via your work Mac, one for OneDrive-Personal via a different Mac, one for Google Drive via a Windows machine), selectable via `piggydrive --bridge work ls /`.
+- ~~**Multi-bridge support.**~~ Shipped — declare `[[bridges]]` (array) in
+  `client/config.example.toml`; the client tries them in order and falls back
+  automatically on connectivity-class failures. Useful when more than one Mac
+  syncs the same drive (e.g. a primary workstation + a backup laptop). One
+  config still binds to one drive — multi-drive routing (one bridge per drive,
+  selected via `--bridge` flag) is a separate future item.
 - **Windows bridge.** The architecture is OS-neutral. A Python sidecar on Windows that talks to OneDrive-for-Business via NTFS reparse points and the Windows OneDrive client would extend piggydrive to Windows-OneDrive shops. Probably ~75% code reuse with the macOS sidecar; the stub-detection differs (NTFS `FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS` instead of APFS dataless files).
 - **Other cloud providers.** Same piggyback pattern works for Google Drive (`~/Library/CloudStorage/GoogleDrive-<email>/`), Dropbox, Box, etc. The sidecar abstraction makes this a per-provider plugin, not a rewrite.
 - **Native Hermes plugin.** v1 uses the agent's existing `terminal` tool to invoke piggydrive. A native plugin (in-process HTTP client, typed tool definitions, streaming progress) would be more efficient and cleaner. v1 works fine without it.

@@ -103,8 +103,9 @@ port = 9090
 
 [onedrive]
 # Absolute path to the OneDrive root on this Mac.
-# Find it: ls ~/Library/CloudStorage/
-root = "/Users/USER/Library/CloudStorage/OneDrive-Acme"
+# Find it:  ls ~/Library/CloudStorage/
+# Looks like:  /Users/<your-mac-user>/Library/CloudStorage/OneDrive-<TenantName>
+root = "/Users/USER/Library/CloudStorage/OneDrive-CompanyName"
 
 [auth]
 # Auto-generated at install. Used by clients in their Authorization header.
@@ -118,15 +119,40 @@ default_timeout_seconds = 120
 
 ### Client (`~/.config/piggydrive/config.toml` on Linux)
 
+Single bridge (legacy, still works):
+
 ```toml
 [bridge]
-url = "http://PRIMARY-HOST:9090"          # Tailscale hostname or IP
-token = "<paste-from-mac>"          # contents of ~/.config/piggydrive-sidecar/token
+url = "http://YOUR-MAC-HOSTNAME:9090"   # Tailscale hostname or IP
+token = "<paste-from-mac>"              # contents of ~/.config/piggydrive-sidecar/token
 
 [defaults]
-pull_timeout_seconds = 120          # override sidecar default
+pull_timeout_seconds = 120              # override sidecar default
 verbose = false
 ```
+
+Multi-bridge with automatic fallback (recommended when more than one Mac
+syncs the same drive):
+
+```toml
+[[bridges]]
+name  = "primary"
+url   = "http://PRIMARY-HOST:9090"
+token = "<paste-from-primary-mac>"
+
+[[bridges]]
+name  = "fallback"
+url   = "http://FALLBACK-HOST:9090"
+token = "<paste-from-fallback-mac>"
+
+[defaults]
+pull_timeout_seconds = 120
+verbose = false                          # set true to see "trying next bridge" notices
+```
+
+The client tries bridges in declared order and falls back on connectivity
+errors only. HTTP errors (404 / 401 / etc.) are returned immediately without
+retrying — those are definitive answers from a reachable bridge.
 
 ## Exit codes (Linux CLI)
 

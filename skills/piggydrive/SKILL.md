@@ -1,6 +1,6 @@
 ---
 name: piggydrive
-description: Access OneDrive (or other piggybacked cloud storage) on Linux via a Mac/Windows bridge. Use when the user references "OneDrive", "the shared drive", "shared folder", or any cloud-stored document on a Linux machine where direct cloud clients are blocked.
+description: Access OneDrive (or other piggybacked cloud storage) on Linux via a Mac/Windows bridge. Use when the user references "OneDrive", "the shared drive", "the work files", or any cloud-stored document on a Linux machine where direct cloud clients are blocked.
 category: tools
 ---
 
@@ -12,7 +12,7 @@ Invoke `piggydrive` whenever the user asks for:
 - Files stored in OneDrive, SharePoint, or institutional cloud storage
 - "Pull the X paper", "find the report on Y", "save this to OneDrive"
 - Project-related documents (proposals, papers, course materials, student data)
-- Anything in folders named like "OneDrive-*", "Courses/", "Projects/", "Research/"
+- Anything in folders named like "OneDrive-*", "Documents/", "Projects/", "Research/"
 
 **Don't** try `rclone`, `abraunegg/onedrive`, `davfs2`, or `curl` to Microsoft Graph directly. On this machine those either aren't installed or fail at the OAuth tenant level. `piggydrive` is the sanctioned path.
 
@@ -39,26 +39,26 @@ Spotlight-backed: returns in ~500ms even on a 200K-file tree. **Always start fil
 
 Examples (concise default — preferred):
 ```bash
-piggydrive find polymer --max 30
-piggydrive find CS101 --in /Cours
-piggydrive find "Rapport_FRQNT" --max 5
+piggydrive find report --max 30
+piggydrive find CS101 --in /Courses
+piggydrive find "Q3_Budget" --max 5
 ```
 
 Tightest output — paths only, one per line, ~80 % smaller than concise:
 ```bash
-piggydrive find polymer --max 50 --paths-only
+piggydrive find report --max 50 --paths-only
 ```
 
 Default output (one line per entry, `flag size path`):
 ```
 - 7_509_380  /Projects/Acme/.../foo.pdf
 s     12_345  /Courses/CS101/syllabus.docx     # 's' = stub, not yet materialized
-d          0  /Projects/Acme/Code          # 'd' = directory
+d          0  /Projects/Acme/Code              # 'd' = directory
 ```
 
 Use `--json` only when you need to pipe to `jq` for one specific field:
 ```bash
-piggydrive find polymer --max 50 --json | jq '.results[] | select(.size_bytes > 1000000) | .path'
+piggydrive find report --max 50 --json | jq '.results[] | select(.size_bytes > 1000000) | .path'
 ```
 
 **Iteration pattern**: start broad with `find` (paths-only), narrow by inspecting candidate paths, then `stat` the few you actually care about. Don't dump 200 JSON entries when you'll only act on 3.
