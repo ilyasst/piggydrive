@@ -22,37 +22,46 @@ A small daemon runs on a Mac (the "bridge") that already has the official OneDri
 
 ## Subcommand reference
 
-All subcommands return structured output. `--json` is available for cleaner parsing on most.
+**Output budget**: prefer the compact human-readable default (1 short line per
+entry: flag, size, path). It's roughly **2.4× smaller than `--json`** and
+contains everything you need to decide which item to drill into next. Use
+`--paths-only` for an even tighter first-pass enumeration. Reach for `--json`
+**only** when you need to programmatically extract a specific field (rare —
+usually you can pipe the concise output to `awk`/`grep` instead).
 
 ### `find` — search for files by name (USE FIRST)
 
 ```bash
-piggydrive find <substring> [--in <subtree>] [--max N] [--json]
+piggydrive find <substring> [--in <subtree>] [--max N] [--paths-only] [--json]
 ```
 
 Spotlight-backed: returns in ~500ms even on a 200K-file tree. **Always start file-discovery work with `find`, not recursive `ls`.** Works on stub files (the cloud-only placeholders) too — it's searching filename indexes, not file contents.
 
-Examples:
+Examples (concise default — preferred):
 ```bash
-piggydrive find polymer --max 50 --json
-piggydrive find CS101 --in /Cours --json
-piggydrive find "Rapport_FRQNT" --max 5 --json
+piggydrive find polymer --max 30
+piggydrive find CS101 --in /Cours
+piggydrive find "Rapport_FRQNT" --max 5
 ```
 
-Returns:
-```json
-{
-  "query": "polymer",
-  "in_path": "/",
-  "engine": "mdfind",
-  "results": [
-    {"path": "/Projects/Acme/.../foo.pdf", "is_dir": false, "size_bytes": 7509380, "materialized": false, ...},
-    ...
-  ],
-  "truncated": false,
-  "total_returned": 12
-}
+Tightest output — paths only, one per line, ~80 % smaller than concise:
+```bash
+piggydrive find polymer --max 50 --paths-only
 ```
+
+Default output (one line per entry, `flag size path`):
+```
+- 7_509_380  /Projects/Acme/.../foo.pdf
+s     12_345  /Courses/CS101/syllabus.docx     # 's' = stub, not yet materialized
+d          0  /Projects/Acme/Code          # 'd' = directory
+```
+
+Use `--json` only when you need to pipe to `jq` for one specific field:
+```bash
+piggydrive find polymer --max 50 --json | jq '.results[] | select(.size_bytes > 1000000) | .path'
+```
+
+**Iteration pattern**: start broad with `find` (paths-only), narrow by inspecting candidate paths, then `stat` the few you actually care about. Don't dump 200 JSON entries when you'll only act on 3.
 
 ### `ls` — list a directory
 
@@ -60,11 +69,11 @@ Returns:
 piggydrive ls <path> [--json]
 ```
 
-Use **after** `find` when you know the subtree and want to enumerate it. Don't use to traverse the whole tree.
+Use **after** `find` when you know the subtree and want to enumerate it. Don't use to traverse the whole tree. Default output is the same compact `flag size path` format as `find`. `--json` only when you need a specific field.
 
 ```bash
 piggydrive ls /Projects/Acme
-piggydrive ls /Courses/CS101 --json
+piggydrive ls /Courses/CS101
 ```
 
 ### `stat` — inspect a single path
@@ -87,7 +96,25 @@ Blocks until the file is fully fetched from cloud and copied locally. Safe to ca
 piggydrive pull "/Projects/Acme/.../foo.pdf" ~/work/foo.pdf
 ```
 
-If the file is huge or network is slow, raise `--timeout` (default 120s). For typical PDFs/docs the default is plenty.
+**Timeout behavior:**
+- Default: 120 seconds (2 minutes) — often too short for files >100MB
+- For files 100-500MB, use `--timeout 300` to `--timeout 600`
+- For files >500MB, consider pre-materializing on the Mac first or using Syncthing
+
+**Timeout configuration:**
+The default timeout is set in `~/.config/piggydrive/config.toml`:
+```toml
+pull_timeout_seconds = 120  # default
+```
+
+For large file workflows, increase this to 600 (10 minutes) or higher. Changes take effect immediately on next `piggydrive` invocation.
+
+**Known issue (2026-05-05):** Even with increased timeout, `piggydrive pull` may fail with "Remote end closed connection without response" if:
+- The Mac bridge is on power-save mode
+- The Tailscale connection is unstable
+- The OneDrive client on Mac is busy syncing other files
+
+In these cases, try `piggydrive wait-online --timeout 60` first, then retry the pull.
 
 ### `push` — upload a file
 
@@ -142,6 +169,22 @@ piggydrive config check
 ```
 
 Three checks: `bridge_healthz`, `onedrive_running`, `ls_root`. Run this first if `piggydrive` is misbehaving — it triages the whole stack.
+
+### `config` — view and modify settings
+
+```bash
+piggydrive config show
+```
+
+View current configuration (bridge URL, timeout settings, auth token path).
+
+**Common config changes:**
+```bash
+# Increase timeout for large file pulls
+piggydrive config set pull_timeout_seconds 600
+```
+
+Edit `~/.config/piggydrive/config.toml` directly for advanced settings. Changes take effect immediately.
 
 ## Common workflow patterns
 
@@ -209,6 +252,27 @@ Branch your recovery strategy on these codes — they're stable across versions.
 
 ### `bridge unreachable: timed out`
 The bridge Mac is asleep, off the network, or the daemon isn't running. Most likely the Mac is asleep on a closed lid. The user can wake it; you can't. Tell the user.
+
+### `config check` succeeds but `pull` fails with exit code 10
+**Known issue (2026-05-05):** `piggydrive config check` may pass (small HTTP requests work) but `pull` fails with "Remote end closed connection without response" for large files or sustained transfers. This indicates the bridge is reachable but the connection is unstable or timing out during large file transfers.
+
+**Recovery strategy:**
+1. Increase timeout: Check `~/.config/piggydrive/config.toml` — default is 120s. For files >100MB, set `pull_timeout_seconds = 600` (10 minutes)
+2. Try `piggydrive wait-online --timeout 60` to re-establish connection
+3. Retry `pull` with explicit timeout: `piggydrive pull <path> <local> --timeout 300`
+4. If still failing, inform the user: "Mac bridge is reachable but large file transfer failed. The Mac may need to be woken or Tailscale reconnected."
+5. **Fallback:** Check if older versions exist locally (e.g., in `~/gdrive/` or `~/Syncs/`) — they may be sufficient for the task
+
+### `pull` times out even with increased timeout
+The file may be very large (>500MB) or the Mac's OneDrive client is busy syncing other files.
+
+**Recovery strategy:**
+1. Ask the user to pre-materialize the file on the Mac (open it in the appropriate app)
+2. Use Syncthing instead for regular large file sync (no timeout issues)
+3. Split the task: pull smaller files first, then attempt the large one
+
+### `ls` hangs but `stat` works
+Full Disk Access for the bridge's `python3` binary was revoked or the path changed. This is a Mac-side fix the user must do. Report to the user with this context.
 
 ### `ls` hangs but `stat` works
 Full Disk Access for the bridge's `python3` binary was revoked or the path changed. This is a Mac-side fix the user must do. Report to the user with this context.
